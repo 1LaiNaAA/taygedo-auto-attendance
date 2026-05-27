@@ -46,6 +46,17 @@ describe('TaygedoApi', () => {
     )
   })
 
+  it('does not use a bare ok message for malformed business responses', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ code: 1, msg: 'ok' }), { status: 200 }),
+    )
+    const api = new TaygedoApi({ fetch: fetchMock })
+
+    await expect(api.getRecommendPostList('access-token', 'uid-1', 'device-1')).rejects.toThrow(
+      'getRecommendPostList 请求失败（HTTP 200，code=1，msg=ok，响应：{"code":1,"msg":"ok"}）',
+    )
+  })
+
   it('classifies an empty HTTP 402 refresh response as a rejected refresh token', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response('', { status: 402 }))
     const api = new TaygedoApi({ fetch: fetchMock })

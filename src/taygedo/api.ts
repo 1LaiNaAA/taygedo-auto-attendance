@@ -545,7 +545,7 @@ export class TaygedoApi {
         : undefined
 
     if (!response.ok || data.code !== 0 || !rawList) {
-      throw new Error(data.msg ?? '获取推荐帖子列表请求失败')
+      throw apiResponseError('getRecommendPostList', response, data, '获取推荐帖子列表请求失败')
     }
 
     return rawList.filter(isRecord).map(toRecommendPost).filter((post): post is RecommendPost => post !== undefined)
@@ -673,6 +673,21 @@ async function readJson(response: Response, endpointName: string): Promise<unkno
 function summarizeResponse(text: string): string {
   const normalized = text.replace(/\s+/g, ' ').trim()
   return normalized.length > 160 ? `${normalized.slice(0, 157)}...` : normalized
+}
+
+function apiResponseError(
+  endpointName: string,
+  response: Response,
+  data: { code?: number, msg?: string },
+  fallback: string,
+): Error {
+  const msg = data.msg?.trim()
+  if (msg && msg.toLowerCase() !== 'ok') {
+    return new Error(msg)
+  }
+  const code = data.code === undefined ? 'unknown' : String(data.code)
+  const msgText = msg ? `，msg=${msg}` : ''
+  return new Error(`${endpointName} 请求失败（HTTP ${response.status}，code=${code}${msgText}，响应：${summarizeResponse(JSON.stringify(data))}）`)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
