@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   keepalive:
-    if: github.repository == 'zzstar101/taygedo-auto-attendance'
+    if: github.repository != 'zzstar101/taygedo-auto-attendance'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
