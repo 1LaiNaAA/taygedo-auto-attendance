@@ -75,8 +75,9 @@ export interface AccountRunSummary {
   status: 'success' | 'failed' | 'skipped'
   success: boolean
   appSignin?: {
-    exp: number
-    goldCoin: number
+    alreadySigned?: boolean
+    exp?: number
+    goldCoin?: number
   }
   gameSignins: Array<{
     gameId: string
@@ -86,6 +87,7 @@ export interface AccountRunSummary {
       name: string
       num: number
     }
+    alreadySigned?: boolean
     success: boolean
   }>
   coinTasks?: CoinTaskSummary
@@ -318,17 +320,18 @@ async function signWithSession(
   const firstRole = gameRoles[0]
   const roleId = firstRole?.roleId ?? account.roleId
 
-  const appSignin = await api.appSignin(accessToken, account.uid, account.deviceId)
+  const appSignin = await signAppIdempotently(api, accessToken, account)
   const gameSignins: AccountRunSummary['gameSignins'] = []
   for (const role of gameRoles) {
     const signinState = await api.getSigninState(accessToken, role.gameId)
     const signinRewards = await api.getSigninRewards(accessToken, role.gameId)
-    await api.gameSignin(accessToken, role.roleId, role.gameId)
+    const gameSignin = await signGameIdempotently(api, accessToken, role.roleId, role.gameId)
     gameSignins.push({
       gameId: role.gameId,
       roleName: role.roleName ?? role.roleId,
       days: signinState.days,
       reward: signinRewards[signinState.days - 1],
+      alreadySigned: gameSignin.alreadySigned,
       success: true,
     })
   }
@@ -359,6 +362,44 @@ async function signWithSession(
       ...(coinTasks ? { coinTasks } : {}),
     },
   }
+}
+
+async function signAppIdempotently(
+  api: Pick<TaygedoApi, 'appSignin'>,
+  accessToken: string,
+  account: TaygedoAccount,
+): Promise<NonNullable<AccountRunSummary['appSignin']>> {
+  try {
+    return await api.appSignin(accessToken, account.uid, account.deviceId)
+  }
+  catch (error) {
+    if (!isAlreadySignedError(error)) {
+      throw error
+    }
+    return { alreadySigned: true }
+  }
+}
+
+async function signGameIdempotently(
+  api: Pick<TaygedoApi, 'gameSignin'>,
+  accessToken: string,
+  roleId: string,
+  gameId: string,
+): Promise<{ alreadySigned?: boolean }> {
+  try {
+    await api.gameSignin(accessToken, roleId, gameId)
+    return {}
+  }
+  catch (error) {
+    if (!isAlreadySignedError(error)) {
+      throw error
+    }
+    return { alreadySigned: true }
+  }
+}
+
+function isAlreadySignedError(error: unknown): boolean {
+  return error instanceof Error && /已.*签到|签到.*过|重复签到|already.*sign/i.test(error.message)
 }
 
 async function signWithRecoverableSession(
@@ -415,7 +456,7 @@ async function runCoinTasks(
   }
 
   if (bbsTarget > 0) {
-    await api.bbsSignin(accessToken, account.uid, account.deviceId)
+    await signBbsIdempotently(api.bbsSignin, accessToken, account)
     summary.bbsSignin = true
   }
 
@@ -460,6 +501,21 @@ async function runCoinTasks(
 
   summary.coinState = await api.getUserCoinTaskState(accessToken)
   return summary
+}
+
+async function signBbsIdempotently(
+  bbsSignin: NonNullable<AttendanceApi['bbsSignin']>,
+  accessToken: string,
+  account: TaygedoAccount,
+): Promise<void> {
+  try {
+    await bbsSignin(accessToken, account.uid, account.deviceId)
+  }
+  catch (error) {
+    if (!isAlreadySignedError(error)) {
+      throw error
+    }
+  }
 }
 
 function remainingTaskCount(tasks: Array<{ code: string, completeTimes: number, limitTimes: number }>, code: string, fallback: number): number {
@@ -541,12 +597,18 @@ function buildSummary(accounts: AccountRunSummary[]): string {
   for (const account of accounts) {
     lines.push(`${account.name}（${account.id}）：${statusLabel(account.status)}`)
     if (account.appSignin) {
-      lines.push(`- APP 签到：获得 ${account.appSignin.goldCoin} 金币，${account.appSignin.exp} 经验`)
+      if (account.appSignin.alreadySigned) {
+        lines.push('- APP 签到：今日已签到')
+      }
+      else {
+        lines.push(`- APP 签到：获得 ${account.appSignin.goldCoin} 金币，${account.appSignin.exp} 经验`)
+      }
     }
     for (const gameSignin of account.gameSignins) {
       const reward = gameSignin.reward ? `，奖励 ${gameSignin.reward.name} x${gameSignin.reward.num}` : ''
       const days = gameSignin.days === undefined ? '' : `，本月第 ${gameSignin.days} 天`
-      lines.push(`- 游戏 ${gameSignin.gameId} / ${gameSignin.roleName}：签到成功${days}${reward}`)
+      const signinStatus = gameSignin.alreadySigned ? '今日已签到' : '签到成功'
+      lines.push(`- 游戏 ${gameSignin.gameId} / ${gameSignin.roleName}：${signinStatus}${days}${reward}`)
     }
     if (account.coinTasks) {
       lines.push(`- ${formatCoinTasks(account.coinTasks)}`)

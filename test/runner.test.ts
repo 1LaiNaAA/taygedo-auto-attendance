@@ -484,6 +484,70 @@ describe('runAttendance', () => {
     expect(result.summary).toContain('游戏 1256 / 幻塔A：签到成功，本月第 1 天，奖励 墨晶 x5')
   })
 
+  it('continues game signins when app signin reports already signed today', async () => {
+    const api = {
+      refreshToken: vi.fn().mockResolvedValue({ accessToken: 'access-main', refreshToken: 'new-main' }),
+      getGameRoles: vi.fn()
+        .mockResolvedValueOnce({ roles: [{ roleId: 'role-1256-a', roleName: '幻塔A' }] })
+        .mockResolvedValueOnce({ roles: [] })
+        .mockResolvedValueOnce({ roles: [] }),
+      appSignin: vi.fn().mockRejectedValue(new Error('您今天已经签到过了')),
+      getSigninState: vi.fn().mockResolvedValue({ days: 1 }),
+      getSigninRewards: vi.fn().mockResolvedValue([{ name: '墨晶', num: 5 }]),
+      gameSignin: vi.fn().mockResolvedValue(undefined),
+    }
+
+    const result = await runAttendance({
+      accountsSecret: JSON.stringify([
+        {
+          id: 'main',
+          name: '主账号',
+          uid: '1',
+          deviceId: 'device-1',
+          refreshToken: 'old-main',
+        },
+      ]),
+      api,
+      maxRetries: 1,
+    })
+
+    expect(api.gameSignin).toHaveBeenCalledWith('access-main', 'role-1256-a', '1256')
+    expect(result.successCount).toBe(1)
+    expect(result.summary).toContain('APP 签到：今日已签到')
+    expect(result.summary).toContain('游戏 1256 / 幻塔A：签到成功，本月第 1 天，奖励 墨晶 x5')
+  })
+
+  it('treats game already-signed responses as successful idempotent signins', async () => {
+    const api = {
+      refreshToken: vi.fn().mockResolvedValue({ accessToken: 'access-main', refreshToken: 'new-main' }),
+      getGameRoles: vi.fn()
+        .mockResolvedValueOnce({ roles: [{ roleId: 'role-1256-a', roleName: '幻塔A' }] })
+        .mockResolvedValueOnce({ roles: [] })
+        .mockResolvedValueOnce({ roles: [] }),
+      appSignin: vi.fn().mockResolvedValue({ exp: 10, goldCoin: 20 }),
+      getSigninState: vi.fn().mockResolvedValue({ days: 1 }),
+      getSigninRewards: vi.fn().mockResolvedValue([{ name: '墨晶', num: 5 }]),
+      gameSignin: vi.fn().mockRejectedValue(new Error('重复签到')),
+    }
+
+    const result = await runAttendance({
+      accountsSecret: JSON.stringify([
+        {
+          id: 'main',
+          name: '主账号',
+          uid: '1',
+          deviceId: 'device-1',
+          refreshToken: 'old-main',
+        },
+      ]),
+      api,
+      maxRetries: 1,
+    })
+
+    expect(result.successCount).toBe(1)
+    expect(result.summary).toContain('游戏 1256 / 幻塔A：今日已签到，本月第 1 天，奖励 墨晶 x5')
+  })
+
   it('skips accounts that already succeeded today in state storage', async () => {
     const stateStore = new MemoryStateStore('test')
     await stateStore.set('attendance:main:2026-05-26', { status: 'success' })
@@ -687,6 +751,48 @@ describe('runAttendance', () => {
       coinState: { todayCoin: 110, limitCoin: 150 },
     })
     expect(result.summary).toContain('金币任务：签到✓ 浏览2/2 点赞1/1 分享✓ 今日金币110/150')
+  })
+
+  it('continues browse like and share coin tasks when bbs signin is already done', async () => {
+    const api = {
+      refreshToken: vi.fn().mockResolvedValue({ accessToken: 'access-main', refreshToken: 'new-main' }),
+      getGameRoles: vi.fn().mockResolvedValue({ roles: [] }),
+      appSignin: vi.fn().mockResolvedValue({ exp: 10, goldCoin: 20 }),
+      getSigninState: vi.fn(),
+      getSigninRewards: vi.fn(),
+      gameSignin: vi.fn(),
+      getUserTasks: vi.fn().mockResolvedValue([
+        { code: 'signin_c', completeTimes: 0, limitTimes: 1 },
+        { code: 'browse_post_c', completeTimes: 0, limitTimes: 1 },
+        { code: 'like_post_c', completeTimes: 0, limitTimes: 1 },
+        { code: 'share', completeTimes: 0, limitTimes: 1 },
+      ]),
+      bbsSignin: vi.fn().mockRejectedValue(new Error('您今天已经签到过了')),
+      getRecommendPostList: vi.fn().mockResolvedValue([
+        { postId: 'post-1', selfOperation: { liked: false } },
+      ]),
+      getPostFull: vi.fn().mockResolvedValue({ postId: 'post-1', selfOperation: { liked: false } }),
+      likePost: vi.fn().mockResolvedValue(undefined),
+      sharePost: vi.fn().mockResolvedValue(undefined),
+      getUserCoinTaskState: vi.fn().mockResolvedValue({ todayCoin: 110, limitCoin: 150 }),
+    }
+
+    const result = await runAttendance({
+      accountsSecret: JSON.stringify([
+        { id: 'main', name: '主账号', uid: '1', deviceId: 'device-1', refreshToken: 'old-main' },
+      ]),
+      api,
+      maxRetries: 1,
+      coinTasks: true,
+      sharePlatform: 'qq',
+      delay: () => Promise.resolve(),
+    })
+
+    expect(api.getPostFull).toHaveBeenCalledWith('access-main', '1', 'device-1', 'post-1')
+    expect(api.likePost).toHaveBeenCalledWith('access-main', '1', 'device-1', 'post-1')
+    expect(api.sharePost).toHaveBeenCalledWith('access-main', '1', 'device-1', 'post-1', 'qq')
+    expect(result.successCount).toBe(1)
+    expect(result.summary).toContain('金币任务：签到✓ 浏览1/1 点赞1/1 分享✓ 今日金币110/150')
   })
 
   it('does not call coin task APIs when coin tasks are disabled', async () => {
