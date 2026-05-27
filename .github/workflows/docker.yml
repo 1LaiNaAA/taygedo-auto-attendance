@@ -17,6 +17,7 @@ env:
 
 jobs:
   docker:
+    if: github.repository == 'zzstar101/taygedo-auto-attendance'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

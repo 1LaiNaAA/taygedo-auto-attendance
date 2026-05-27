@@ -8,6 +8,7 @@ on:
 
 jobs:
   verify:
+    if: github.repository == 'zzstar101/taygedo-auto-attendance'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
